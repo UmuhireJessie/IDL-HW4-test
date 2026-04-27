@@ -39,9 +39,9 @@ class DecoderOnlyTransformer(nn.Module):
 
         pad_mask_dec = None
         if target_lengths is not None:
-            pad_mask_dec = PadMask(padded_targets.unsqueeze(-1), target_lengths)
+            pad_mask_dec = PadMask(padded_targets, target_lengths)
 
-        causal_mask = CausalMask(padded_targets.unsqueeze(-1))
+        causal_mask = CausalMask(padded_targets)
 
         x = self.dropout(self.positional_encoding(self.target_embedding(padded_targets)))
 
@@ -108,7 +108,7 @@ class EncoderDecoderTransformer(nn.Module):
             x_enc = self.positional_encoding(x_enc)
         x_enc = self.dropout(x_enc)
 
-        pad_mask_src = PadMask(x_enc, x_enc_lengths.long())
+        pad_mask_src = PadMask(x_enc, x_enc_lengths)
 
         running_att = {}
         for i in range(self.num_encoder_layers):
@@ -129,12 +129,12 @@ class EncoderDecoderTransformer(nn.Module):
     def decode(self, padded_targets, encoder_output, target_lengths=None, pad_mask_src=None):
         pad_mask_tgt = None
         if target_lengths is not None:
-            pad_mask_tgt = PadMask(padded_targets.unsqueeze(-1), target_lengths)
+            pad_mask_tgt = PadMask(padded_targets, target_lengths)
 
         if pad_mask_tgt is None and self.training:
             warnings.warn("pad_mask_tgt is None")
 
-        causal_mask = CausalMask(padded_targets.unsqueeze(-1))
+        causal_mask = CausalMask(padded_targets)
 
         x_dec = self.target_embedding(padded_targets)
         if not self.skip_decoder_pe:
