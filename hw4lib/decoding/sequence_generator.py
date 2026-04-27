@@ -139,8 +139,10 @@ class SequenceGenerator:
 
             # Finished beams: block all expansions, allow EOS to keep score
             cum_scores[finished] = float('-inf')
-            # vectorised: for each finished (b,w), set EOS slot = frozen score
-            cum_scores[finished, self.tokenizer.eos_id] = scores[finished]
+            # Correctly set EOS slot for finished beams using explicit indexing
+            finished_b, finished_w = finished.nonzero(as_tuple=True)
+            if finished_b.numel() > 0:
+                cum_scores[finished_b, finished_w, self.tokenizer.eos_id] = scores[finished_b, finished_w]
 
             # Select top-W globally
             flat          = cum_scores.view(batch_size, -1)     # (B, W*V)
