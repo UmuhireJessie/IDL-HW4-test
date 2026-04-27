@@ -87,8 +87,8 @@ class ASRDataset(Dataset):
                 self.total_tokens += len(tokenized)
                 self.text_max_len = max(self.text_max_len, len(tokenized) + 1)
 
-                shifted = torch.LongTensor([self.sos_token] + tokenized)
-                golden = torch.LongTensor(tokenized + [self.eos_token])
+                shifted = [self.sos_token] + tokenized
+                golden = tokenized + [self.eos_token]
                 self.transcripts_shifted.append(shifted)
                 self.transcripts_golden.append(golden)
 
@@ -131,8 +131,8 @@ class ASRDataset(Dataset):
 
         shifted_transcript, golden_transcript = None, None
         if self.partition != "test-clean":
-            shifted_transcript = self.transcripts_shifted[idx]
-            golden_transcript = self.transcripts_golden[idx]
+            shifted_transcript = torch.LongTensor(self.transcripts_shifted[idx])
+            golden_transcript = torch.LongTensor(self.transcripts_golden[idx])
 
         return feat, shifted_transcript, golden_transcript
 

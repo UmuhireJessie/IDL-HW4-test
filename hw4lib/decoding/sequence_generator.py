@@ -200,8 +200,8 @@ class SequenceGenerator:
             repeat_penalty: Penalty for repeated tokens
         Returns:
             Tuple of tensors: (sequences, scores)
-             - sequences is of shape (batch_size, beam_width, sequence_length) where each sequence in a beam set is sorted by score
-             - scores is of shape (batch_size, beam_width)
+            - sequences is of shape (batch_size, beam_width, sequence_length) where each sequence in a beam set is sorted by score
+            - scores is of shape (batch_size, beam_width)
         """
         # Add input validation
         if not torch.is_tensor(x):
@@ -212,29 +212,27 @@ class SequenceGenerator:
             raise ValueError("beam_width must be >= 1")
         if self.max_length < x.size(1):
             raise ValueError("max_length must be >= input sequence length")
-        
+
         batch_size = x.size(0)
-        vocab_size = None  # determined after first forward pass
+        vocab_size = None
 
         # Initialize scores (B, beam_width)
-        scores = torch.zeros(batch_size, beam_width, device=x.device)
+        scores   = torch.zeros(batch_size, beam_width, device=x.device)
         finished = torch.zeros(batch_size, beam_width, dtype=torch.bool, device=x.device)
 
         # --- First step ---
-        logits = self.score_fn(x)  # (B, V)
+        logits     = self.score_fn(x)                               # (B, V)
         vocab_size = logits.size(-1)
-        logits = self._apply_repeat_penalty(logits, x, repeat_penalty)
-        logits = logits / temperature
-        log_probs = torch.log_softmax(logits, dim=-1)  # (B, V)
+        logits     = self._apply_repeat_penalty(logits, x, repeat_penalty)
+        logits     = logits / temperature
+        log_probs  = torch.log_softmax(logits, dim=-1)              # (B, V)
 
-        # Select top beam_width tokens
-        top_scores, top_tokens = torch.topk(log_probs, beam_width, dim=-1)  # (B, beam_width)
-        scores = top_scores  # (B, beam_width)
+        top_scores, top_tokens = torch.topk(log_probs, beam_width, dim=-1)  # (B, W)
+        scores = top_scores
 
-        # Expand x along beam dimension: (B, seq_len) -> (B, beam_width, seq_len)
-        x = x.unsqueeze(1).expand(-1, beam_width, -1)  # (B, beam_width, seq_len)
-        x = torch.cat([x, top_tokens.unsqueeze(-1)], dim=-1)  # (B, beam_width, seq_len+1)
-
+        # Expand x: (B, seq) -> (B, W, seq+1)
+        x        = x.unsqueeze(1).expand(-1, beam_width, -1).contiguous()
+        x        = torch.cat([x, top_tokens.unsqueeze(-1)], dim=-1)
         finished = finished | (top_tokens == self.tokenizer.eos_id)
 
         # --- Subsequent steps ---
@@ -242,42 +240,44 @@ class SequenceGenerator:
             if finished.all():
                 break
 
-            # ONE batched forward pass instead of beam_width separate calls
-            seq_len = x.size(2)
-            x_flat = x.view(batch_size * beam_width, seq_len)        # (B*W, seq)
-            logits_flat = self.score_fn(x_flat)                      # (B*W, V)
-            next_token_scores = logits_flat.view(batch_size, beam_width, vocab_size)  # (B, W, V)
+            # Call score_fn once per beam with shape (B, seq) — never (B*W, seq)
+            beam_logits = []
+            for w in range(beam_width):
+                logits_w = self.score_fn(x[:, w, :])               # (B, V)
+                beam_logits.append(logits_w)
+            next_token_scores = torch.stack(beam_logits, dim=1)     # (B, W, V)
+
             next_token_scores = self._apply_repeat_penalty(next_token_scores, x, repeat_penalty)
             next_token_scores = next_token_scores / temperature
             next_token_scores = torch.log_softmax(next_token_scores, dim=-1)
 
-            # Cumulative scores: (B, beam_width, V)
+            # Cumulative scores: (B, W, V)
             cum_scores = scores.unsqueeze(-1) + next_token_scores
 
-            # Zero out scores for finished beams (they shouldn't expand)
+            # Zero out finished beams
             cum_scores[finished] = float('-inf')
 
-            # Flatten to (B, beam_width * V) and select top beam_width
-            cum_scores_flat = cum_scores.view(batch_size, -1)
+            # Select top beam_width candidates
+            cum_scores_flat          = cum_scores.view(batch_size, -1)
             top_cum_scores, top_indices = torch.topk(cum_scores_flat, beam_width, dim=-1)
 
-            beam_indices = top_indices // vocab_size  # (B, beam_width)
-            next_tokens = top_indices % vocab_size    # (B, beam_width)
+            beam_indices = top_indices // vocab_size                # (B, W)
+            next_tokens  = top_indices %  vocab_size                # (B, W)
+            scores       = top_cum_scores
 
-            scores = top_cum_scores  # (B, beam_width)
+            # Reorder and append
+            batch_idx = torch.arange(batch_size, device=x.device).unsqueeze(1)
+            x         = x[batch_idx, beam_indices]
+            x         = torch.cat([x, next_tokens.unsqueeze(-1)], dim=-1)
 
-            # Reorder x based on beam_indices
-            x = x[torch.arange(batch_size, device=x.device).unsqueeze(1), beam_indices]  # (B, beam_width, seq_len)
-            x = torch.cat([x, next_tokens.unsqueeze(-1)], dim=-1)  # (B, beam_width, seq_len+1)
+            finished  = finished[batch_idx, beam_indices]
+            finished  = finished | (next_tokens == self.tokenizer.eos_id)
 
-            # Update finished flags
-            finished = finished[torch.arange(batch_size, device=x.device).unsqueeze(1), beam_indices]
-            finished = finished | (next_tokens == self.tokenizer.eos_id)
-
-        # Sort by scores descending
+        # Sort beams best -> worst
         sorted_scores, sorted_indices = scores.sort(dim=-1, descending=True)
-        x = x[torch.arange(batch_size, device=x.device).unsqueeze(1), sorted_indices]
-        scores = sorted_scores
+        batch_idx = torch.arange(batch_size, device=x.device).unsqueeze(1)
+        x         = x[batch_idx, sorted_indices]
+        scores    = sorted_scores
 
         return x, scores
 
