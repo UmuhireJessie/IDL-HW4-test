@@ -242,14 +242,11 @@ class SequenceGenerator:
             if finished.all():
                 break
 
-            next_token_scores = []
-            for b in range(beam_width):
-                beam_seqs = x[:, b, :]  # (B, seq_len)
-                beam_logits = self.score_fn(beam_seqs)  # (B, V)
-                next_token_scores.append(beam_logits)
-
-            # (B, beam_width, V)
-            next_token_scores = torch.stack(next_token_scores, dim=1)
+            # ONE batched forward pass instead of beam_width separate calls
+            seq_len = x.size(2)
+            x_flat = x.view(batch_size * beam_width, seq_len)        # (B*W, seq)
+            logits_flat = self.score_fn(x_flat)                      # (B*W, V)
+            next_token_scores = logits_flat.view(batch_size, beam_width, vocab_size)  # (B, W, V)
             next_token_scores = self._apply_repeat_penalty(next_token_scores, x, repeat_penalty)
             next_token_scores = next_token_scores / temperature
             next_token_scores = torch.log_softmax(next_token_scores, dim=-1)
