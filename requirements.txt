@@ -37,7 +37,7 @@ matplotlib-inline
 mpmath==1.3.0
 nest_asyncio 
 networkx==3.4.2
-numpy==2.2.0
+numpy
 packaging 
 pandas==2.2.3
 parso 
